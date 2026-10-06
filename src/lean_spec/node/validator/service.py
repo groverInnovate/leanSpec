@@ -378,31 +378,32 @@ class ValidatorService:
         key_field: Literal["attestation_secret_key", "proposal_secret_key"],
     ) -> Signature:
         """
-        Prepare the chosen XMSS key for the slot, sign, and retain the advanced key.
+        Signing with forward-only preparation and retained key state.
 
-        Preparation moves the resident tree window forward; it does not record signing history.
+        Preparation moves the resident tree window forward.
+        Signing history requires separate tracking.
         Impossible slots must be rejected before tree construction or signing.
         """
         scheme = TARGET_SIGNATURE_SCHEME
         secret_key = getattr(validator_entry, key_field)
 
-        slot_int = int(slot)
-        if slot_int not in scheme.get_activation_interval(secret_key):
+        requested_slot = int(slot)
+        if requested_slot not in scheme.get_activation_interval(secret_key):
             raise ValueError("Key is not active for the specified slot.")
 
-        prepared = scheme.get_prepared_interval(secret_key)
-        if slot_int < prepared.start:
+        prepared_interval = scheme.get_prepared_interval(secret_key)
+        if requested_slot < prepared_interval.start:
             raise ValueError(
                 f"Slot {slot} is outside the prepared interval "
-                f"[{prepared.start}, {prepared.stop}); "
+                f"[{prepared_interval.start}, {prepared_interval.stop}); "
                 "preparation cannot move backward."
             )
-        while slot_int not in prepared:
-            advanced_key = scheme.advance_preparation(secret_key)
-            advanced_prepared = scheme.get_prepared_interval(advanced_key)
-            if advanced_prepared.start <= prepared.start:
+        while requested_slot not in prepared_interval:
+            advanced_secret_key = scheme.advance_preparation(secret_key)
+            advanced_prepared_interval = scheme.get_prepared_interval(advanced_secret_key)
+            if advanced_prepared_interval.start <= prepared_interval.start:
                 raise ValueError(f"Cannot advance preparation for slot {slot}.")
-            secret_key, prepared = advanced_key, advanced_prepared
+            secret_key, prepared_interval = advanced_secret_key, advanced_prepared_interval
 
         signature = scheme.sign(secret_key, slot, message)
 
