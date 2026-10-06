@@ -378,17 +378,31 @@ class ValidatorService:
         key_field: Literal["attestation_secret_key", "proposal_secret_key"],
     ) -> Signature:
         """
-        Advance the chosen XMSS key to the slot, sign, and persist the advanced key.
+        Prepare the chosen XMSS key for the slot, sign, and retain the advanced key.
 
-        XMSS keys are stateful one-time signatures, so each signature consumes key state.
-        The advanced key is written back so the next slot does not reuse it.
+        Preparation moves the resident tree window forward; it does not record signing history.
+        Impossible slots must be rejected before tree construction or signing.
         """
         scheme = TARGET_SIGNATURE_SCHEME
         secret_key = getattr(validator_entry, key_field)
 
         slot_int = int(slot)
-        while slot_int not in scheme.get_prepared_interval(secret_key):
-            secret_key = scheme.advance_preparation(secret_key)
+        if slot_int not in scheme.get_activation_interval(secret_key):
+            raise ValueError("Key is not active for the specified slot.")
+
+        prepared = scheme.get_prepared_interval(secret_key)
+        if slot_int < prepared.start:
+            raise ValueError(
+                f"Slot {slot} is outside the prepared interval "
+                f"[{prepared.start}, {prepared.stop}); "
+                "preparation cannot move backward."
+            )
+        while slot_int not in prepared:
+            advanced_key = scheme.advance_preparation(secret_key)
+            advanced_prepared = scheme.get_prepared_interval(advanced_key)
+            if advanced_prepared.start <= prepared.start:
+                raise ValueError(f"Cannot advance preparation for slot {slot}.")
+            secret_key, prepared = advanced_key, advanced_prepared
 
         signature = scheme.sign(secret_key, slot, message)
 
